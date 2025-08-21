@@ -1,76 +1,75 @@
-import express from 'express';
-import cors from 'cors';
-import multer from 'multer';
-import fetch from 'node-fetch';
-import FormData from 'form-data';
-import path from 'path';
-import { fileURLToPath } from 'url';
+// server.js
 
+const express = require('express');
+const multer = require('multer');
+const fetch = require('node-fetch');
+const FormData = require('form-data');
+const path = require('path');
+const cors = require('cors');
 
 const app = express();
 const port = 3000;
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
-// ... other imports and code ...
+// Use environment variable for the API key
+const API_KEY = process.env.CLIPDROP_API_KEY;
 
+// Use a simple memory storage for uploaded images
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.use(cors());
+
+// Serve the HTML file at the root URL
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ... your existing app.post route ...
-
-
-
-// IMPORTANT: Replace with your actual ClipDrop API key
-const CLIPDROP_API_KEY = process.env.CLIPDROP_API_KEY;
-
-// Use CORS to allow requests from your frontend
-app.use(cors());
-
-// Configure multer for file uploads
-const upload = multer({ 
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
-
-app.post('/api/remove-background', upload.single('image'), async (req, res) => {
+app.post('/remove-background', upload.single('image_file'), async (req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).send('No image file provided.');
+            return res.status(400).json({ error: 'No image file uploaded.' });
         }
 
         const form = new FormData();
-        // Append the image file from the request buffer
         form.append('image_file', req.file.buffer, {
             filename: req.file.originalname,
             contentType: req.file.mimetype,
         });
 
-        const clipdropResponse = await fetch("https://clipdrop-api.co/remove-background/v1", {
+        // Make the API request to ClipDrop
+        const clipdropResponse = await fetch('https://clipdrop-api.co/remove-background/v1', {
             method: 'POST',
             headers: {
-                'x-api-key': CLIPDROP_API_KEY,
+                'x-api-key': API_KEY,
             },
             body: form,
         });
 
-        if (!clipdropResponse.ok) {
-            const errorText = await clipdropResponse.text();
-            console.error('ClipDrop API error:', errorText);
-            return res.status(clipdropResponse.status).send(`ClipDrop API error: ${errorText}`);
-        }
+        // Log the credit information from the response headers
+        const remainingCredits = clipdropResponse.headers.get('x-remaining-credits');
+        const consumedCredits = clipdropResponse.headers.get('x-credits-consumed');
+        console.log(`Credits Remaining: ${remainingCredits}`);
+        console.log(`Credits Consumed by this request: ${consumedCredits}`);
 
-        // Send the processed image back to the client
-        res.setHeader('Content-Type', clipdropResponse.headers.get('content-type'));
-        clipdropResponse.body.pipe(res);
+        if (clipdropResponse.ok) {
+            const imageBuffer = await clipdropResponse.buffer();
+            res.setHeader('Content-Type', 'image/png');
+            res.send(imageBuffer);
+        } else {
+            // Handle API errors
+            const errorText = await clipdropResponse.text();
+            console.error('ClipDrop API Error:', errorText);
+            if (clipdropResponse.status === 402) {
+                return res.status(402).json({ error: 'Credits exhausted. Please update the API key or purchase more credits.' });
+            }
+            res.status(clipdropResponse.status).json({ error: 'Failed to process image.' });
+        }
 
     } catch (error) {
         console.error('Server error:', error);
-        res.status(500).send('An internal server error occurred.');
+        res.status(500).json({ error: 'Internal server error.' });
     }
 });
 
 app.listen(port, () => {
-    console.log(`Server listening on http://localhost:${port}`);
+    console.log(`Server listening at http://localhost:${port}`);
 });
